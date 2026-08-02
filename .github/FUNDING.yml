@@ -1,14 +1,19 @@
-# These are supported funding model platforms
+# SAFE FUNDING configuration for this repository
+# WARNING: Never include bank account numbers, API keys, or other sensitive information here.
+# Use public donation/sponsorship URLs only (GitHub Sponsors, PayPal.Me, BuyMeACoffee, Ko-fi, Patreon, Open Collective, etc.).
 
-github: # Replace with up to 4 GitHub Sponsors-enabled usernames e.g., [user1, user2]
-patreon: # Replace with a single Patreon username
-open_collective: # Replace with a single Open Collective username
-ko_fi: # Replace with a single Ko-fi username
-tidelift: # Replace with a single Tidelift platform-name/package-name e.g., npm/babel
-community_bridge: # Replace with a single Community Bridge project-name e.g., cloud-foundry
-liberapay: # Replace with a single Liberapay username
-issuehunt: # Replace with a single IssueHunt username
-lfx_crowdfunding: # Replace with a single LFX Crowdfunding project-name e.g., cloud-foundry
-polar: # Replace with a single Polar usernames : support itech board # Replace with a single Buy Me a Coffee username
-thanks_dev: # Replace with a single thanks.dev username
-custom: # Replace with up to 4 custom sponsorship URLs e.g., ['link1', 'link2']
+github: ["zakpollyqueens"]  # Replace with up to 4 GitHub Sponsors-enabled usernames (e.g., ["user1","user2"]) if you use GitHub Sponsors
+patreon: ""               # Replace with your Patreon username (string), e.g., "your-patreon"
+open_collective: ""       # Replace with Open Collective slug
+ko_fi: ""                # Replace with Ko-fi username (without @)
+tidelift: ""
+community_bridge: ""
+liberapay: ""
+issuehunt: ""
+lfx_crowdfunding: ""
+polar: ""
+thanks_dev: ""
+custom:
+  # Add up to 4 custom, public donation URLs. Examples (replace with your real links):
+  - "https://buymeacoffee.com/yourname"
+  - "https://www.paypal.com/donate?hosted_button_id=YOUR_ID"

@@ -3,7 +3,7 @@ from telegram.ext import Application, CommandHandler
 
 TOKEN = os.'8892035018:AAGm1GWqajjSfgq3bvZxZ1HwySKBi83tLVU'
 CHANNEL_ID = "@ZakmolanitechSolutions"
-ADMIN_ID ="ZakMolan”
+ADMIN_ID ='7317351578'
 tech_tips = [
     "💡 Clear WhatsApp cache: Settings > Storage",
     "📱 Dial *100# for MTN/Airtel bundles",

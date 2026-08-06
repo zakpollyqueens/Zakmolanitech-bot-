@@ -6,7 +6,7 @@ CHANNEL_ID = "@ZakmolanitechSolutions"
 
 tech_tips = [
     "💡 Clear WhatsApp cache: Settings > Storage",
-    "📱 Dial *303# for MTN/Airtel bundles",
+    "📱 Dial *100# for MTN/Airtel bundles",
     "💻 Learn Python, get remote jobs"
 ]
 participants = []

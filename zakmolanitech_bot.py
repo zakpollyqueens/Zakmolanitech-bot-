@@ -4,7 +4,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # READ SECRETS FROM RENDER
-TOKEN = os.environ['TOKEN_ID']
+TOKEN = os.environ['TOKEN']
 CHANNEL_ID = os.environ['CHANNEL_ID']
 ADMIN_ID = int(os.environ['ADMIN_ID'])
 

@@ -36,25 +36,47 @@ def run_flask():
 # 2. TELEGRAM BOT CODE
 async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    # This will send YOU the ID in telegram
-    await update.message.reply_text(f"Your Telegram ID is: `{user_id}`\n\nCopy this number.", parse_mode="Markdown")
-    
+
+    # Send the invoking user's Telegram ID (useful for copying to ADMIN_ID)
+    await update.message.reply_text(
+        f"Your Telegram ID is: `{user_id}`\n\nCopy this number.",
+        parse_mode="Markdown"
+    )
+
+    # Only allow the configured admin to start giveaways
     if str(ADMIN_ID) != str(user_id):
         await update.message.reply_text("❌ You are not authorized to start a giveaway.")
         return
-    
-    # rest of your giveaway code...
+
+    # Build the inline keyboard for joining
+    keyboard = [
+        [InlineKeyboardButton("🎁 Join Giveaway", callback_data="join_giveaway")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Post the giveaway to the configured channel/chat
+    msg = await context.bot.send_message(
+        chat_id=CHANNEL_ID,
+        text="🔥 *NEW GIVEAWAY STARTED!* 🔥\n\nTap the button below to join!",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+    # Track participants by message id
+    giveaways[msg.message_id] = []
+
+    # Confirm to the admin that the giveaway was posted
+    await update.message.reply_text(f"✅ Giveaway posted in {CHANNEL_ID}")
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     if query.data == "join_giveaway":
         user = query.from_user
         msg_id = query.message.message_id # FIX: use .message.message_id
-        
+
         if msg_id in giveaways:
             if user.id not in giveaways[msg_id]:
                 giveaways[msg_id].append(user.id)
@@ -66,7 +88,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     # Start Flask in a separate thread
     threading.Thread(target=run_flask, daemon=True).start()
-    
+
     # Start Telegram Bot
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("startgiveaway", startgiveaway))

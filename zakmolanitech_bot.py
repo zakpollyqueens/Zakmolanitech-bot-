@@ -2,6 +2,8 @@ import os
 import asyncio
 import threading
 import logging
+import sqlite3
+from datetime import datetime
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -14,12 +16,77 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN = os.environ['TOKEN']
-CHANNEL_ID = os.environ['CHANNEL_ID']  # e.g. @ZakmolanitechSolutions or numeric id
-ADMIN_ID = int(os.environ['ADMIN_ID']) # e.g. 123456789
+# Validate environment variables
+required_vars = ['TOKEN', 'CHANNEL_ID', 'ADMIN_ID']
+for var in required_vars:
+    if var not in os.environ:
+        raise ValueError(f"Missing required environment variable: {var}")
 
-# Store giveaway data in memory
+TOKEN = os.environ['TOKEN']
+CHANNEL_ID = os.environ['CHANNEL_ID']
+ADMIN_ID = int(os.environ['ADMIN_ID'])
+
+# Store giveaway data in memory (with database backup for persistence)
 giveaways = {}
+active_giveaway_id = None  # Track the current giveaway message ID
+
+# Database setup for persistence
+DB_PATH = 'giveaways.db'
+
+def init_database():
+    """Initialize SQLite database for giveaway persistence."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS giveaways (
+            message_id INTEGER PRIMARY KEY,
+            channel_id TEXT,
+            created_at TIMESTAMP,
+            participants TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS participants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            giveaway_id INTEGER,
+            user_id INTEGER,
+            username TEXT,
+            joined_at TIMESTAMP,
+            FOREIGN KEY (giveaway_id) REFERENCES giveaways(message_id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def save_giveaway_to_db(msg_id, channel_id):
+    """Save giveaway to database."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO giveaways (message_id, channel_id, created_at, participants)
+            VALUES (?, ?, ?, ?)
+        ''', (msg_id, channel_id, datetime.now(), ''))
+        conn.commit()
+        conn.close()
+        logging.info(f"Giveaway {msg_id} saved to database")
+    except Exception as e:
+        logging.error(f"Failed to save giveaway to database: {e}")
+
+def add_participant_to_db(msg_id, user_id, username):
+    """Add participant to database."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO participants (giveaway_id, user_id, username, joined_at)
+            VALUES (?, ?, ?, ?)
+        ''', (msg_id, user_id, username, datetime.now()))
+        conn.commit()
+        conn.close()
+        logging.info(f"Participant {user_id} added to giveaway {msg_id}")
+    except Exception as e:
+        logging.error(f"Failed to add participant to database: {e}")
 
 # 1. FLASK SERVER TO KEEP RENDER ALIVE
 app_flask = Flask('')
@@ -28,14 +95,15 @@ app_flask = Flask('')
 def home():
     return "Zakmolanitech Bot is alive!"
 
-
 def run_flask():
     app_flask.run(host='0.0.0.0', port=10000)
 
-
 # 2. TELEGRAM BOT CODE
 async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Determine the invoking user id (if available)
+    """Start a new giveaway (admin-only)."""
+    global active_giveaway_id
+    
+    # Determine the invoking user id
     user = update.effective_user
     user_id = None
     if user:
@@ -45,7 +113,7 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logging.info(f"startgiveaway invoked by user_id={user_id} ADMIN_ID={ADMIN_ID}")
 
-    # Try to DM the user their ID (works only if the user started the bot)
+    # Try to DM the user their ID
     sent_dm = False
     if user_id is not None:
         try:
@@ -57,7 +125,6 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent_dm = True
         except Exception as e:
             logging.warning(f"Could not send DM to {user_id}: {e}")
-            # Fallback to replying in the same chat if possible
             if update.message:
                 try:
                     await update.message.reply_text(
@@ -80,8 +147,8 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Helper to get a chat id to message back to the caller
     caller_chat = caller_id if caller_id is not None else (update.effective_chat.id if update.effective_chat else None)
 
+    # Authorization check
     if caller_id != ADMIN_ID:
-        # Notify the caller they are unauthorized
         try:
             if update.message:
                 await update.message.reply_text("❌ You are not authorized to start a giveaway.")
@@ -91,11 +158,17 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.warning("Could not notify caller about unauthorized access.")
         return
 
+    # Stop any active giveaway
+    if active_giveaway_id is not None:
+        logging.info(f"Stopping previous giveaway {active_giveaway_id}")
+        if active_giveaway_id in giveaways:
+            del giveaways[active_giveaway_id]
+
     # Build inline keyboard
     keyboard = [[InlineKeyboardButton("🎁 Join Giveaway", callback_data="join_giveaway")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Normalize CHANNEL_ID: allow numeric ids or @username strings
+    # Normalize CHANNEL_ID
     post_chat_id = CHANNEL_ID
     try:
         if isinstance(CHANNEL_ID, str) and CHANNEL_ID.lstrip('-').isdigit():
@@ -103,7 +176,7 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         post_chat_id = CHANNEL_ID
 
-    # Post giveaway and handle failures
+    # Post giveaway
     try:
         msg = await context.bot.send_message(
             chat_id=post_chat_id,
@@ -111,32 +184,93 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
-    except Exception as e:
-        logging.exception(f"Failed to post giveaway to {CHANNEL_ID}: {e}")
-        # Notify admin about the failure
+        active_giveaway_id = msg.message_id
+        giveaways[msg.message_id] = []
+        save_giveaway_to_db(msg.message_id, str(CHANNEL_ID))
+        
+        # Confirm to admin
         try:
             if caller_chat is not None:
-                await context.bot.send_message(chat_id=caller_chat, text=f"Failed to post giveaway to {CHANNEL_ID}: {e}")
+                await context.bot.send_message(chat_id=caller_chat, text=f"✅ Giveaway posted in {CHANNEL_ID}")
+            elif update.message:
+                await update.message.reply_text(f"✅ Giveaway posted in {CHANNEL_ID}")
+        except Exception:
+            logging.warning("Could not send confirmation message to admin.")
+            
+    except Exception as e:
+        logging.exception(f"Failed to post giveaway to {CHANNEL_ID}: {e}")
+        try:
+            if caller_chat is not None:
+                await context.bot.send_message(chat_id=caller_chat, text=f"❌ Failed to post giveaway to {CHANNEL_ID}: {e}")
         except Exception:
             logging.warning("Could not notify admin about posting failure.")
         return
 
-    # Track participants
-    giveaways[msg.message_id] = []
+async def stopgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop the current giveaway and announce winner (admin-only)."""
+    global active_giveaway_id
+    
+    user = update.effective_user
+    user_id = user.id if user else None
 
-    # Confirm to admin
+    # Authorization check
+    if user_id != ADMIN_ID:
+        try:
+            await update.message.reply_text("❌ You are not authorized to stop a giveaway.")
+        except Exception:
+            logging.warning("Could not send unauthorized message.")
+        return
+
+    if active_giveaway_id is None or active_giveaway_id not in giveaways:
+        try:
+            await update.message.reply_text("❌ No active giveaway to stop.")
+        except Exception:
+            logging.warning("Could not send no giveaway message.")
+        return
+
+    participants = giveaways[active_giveaway_id]
+    
+    if not participants:
+        try:
+            await update.message.reply_text("❌ No participants in the giveaway.")
+        except Exception:
+            logging.warning("Could not send no participants message.")
+        return
+
+    # Select random winner
+    import random
+    winner_id = random.choice(participants)
+    
+    # Normalize CHANNEL_ID
+    post_chat_id = CHANNEL_ID
     try:
-        if caller_chat is not None:
-            await context.bot.send_message(chat_id=caller_chat, text=f"✅ Giveaway posted in {CHANNEL_ID}")
-        elif update.message:
-            await update.message.reply_text(f"✅ Giveaway posted in {CHANNEL_ID}")
+        if isinstance(CHANNEL_ID, str) and CHANNEL_ID.lstrip('-').isdigit():
+            post_chat_id = int(CHANNEL_ID)
     except Exception:
-        logging.warning("Could not send confirmation message to admin.")
+        post_chat_id = CHANNEL_ID
 
+    # Announce winner
+    try:
+        await context.bot.send_message(
+            chat_id=post_chat_id,
+            text=f"🎉 *GIVEAWAY WINNER!* 🎉\n\nCongratulations to <a href='tg://user?id={winner_id}'>User {winner_id}</a>!\n\nTotal participants: {len(participants)}",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to announce winner: {e}")
+
+    # Clean up
+    del giveaways[active_giveaway_id]
+    active_giveaway_id = None
+    
+    try:
+        await update.message.reply_text(f"✅ Giveaway ended! Winner: {winner_id}")
+    except Exception:
+        logging.warning("Could not send confirmation message.")
 
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reply with the caller's Telegram ID and attempt a DM as well.
-
+    """Reply with the caller's Telegram ID.
+    
     Use this to confirm the numeric ID to put into ADMIN_ID.
     """
     user = update.effective_user
@@ -147,12 +281,14 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_chat.id
 
     if user_id is None:
-        # Nothing we can do
-        if update.message:
-            await update.message.reply_text("Could not determine your Telegram ID.")
+        try:
+            if update.message:
+                await update.message.reply_text("Could not determine your Telegram ID.")
+        except Exception:
+            logging.warning("Could not send error message.")
         return
 
-    text = f"Your Telegram ID is: `{user_id}`\n\nCopy this number and set it as ADMIN_ID in your environment." 
+    text = f"Your Telegram ID is: `{user_id}`\n\nCopy this number and set it as ADMIN_ID in your environment."
 
     # First try to reply in the same chat
     try:
@@ -161,41 +297,52 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.warning(f"Could not reply in-chat with ID: {e}")
 
-    # Also try sending as a DM (works only if user started the bot)
+    # Also try sending as a DM
     try:
         await context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
     except Exception as e:
         logging.info(f"Could not send DM with ID to {user_id}: {e}")
 
-
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button clicks for giveaway participation."""
     query = update.callback_query
+    
+    # Safety check
+    if not query.message or not query.message.message_id:
+        await query.answer("❌ Error: message context missing", show_alert=True)
+        return
+
     await query.answer()
 
     if query.data == "join_giveaway":
         user = query.from_user
-        msg_id = query.message.message_id # FIX: use .message.message_id
+        msg_id = query.message.message_id
 
         if msg_id in giveaways:
             if user.id not in giveaways[msg_id]:
                 giveaways[msg_id].append(user.id)
+                add_participant_to_db(msg_id, user.id, user.username or "Unknown")
                 await query.answer("✅ You have joined the giveaway!", show_alert=True)
             else:
                 await query.answer("⚠️ You already joined!", show_alert=True)
-
+        else:
+            await query.answer("❌ Giveaway not found!", show_alert=True)
 
 def main():
+    # Initialize database
+    init_database()
+    
     # Start Flask in a separate thread
     threading.Thread(target=run_flask, daemon=True).start()
 
     # Start Telegram Bot
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("startgiveaway", startgiveaway))
+    app.add_handler(CommandHandler("stopgiveaway", stopgiveaway))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CallbackQueryHandler(button_handler))
     print("Bot is running...")
     app.run_polling()
-
 
 if __name__ == '__main__':
     main()

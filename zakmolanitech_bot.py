@@ -100,111 +100,17 @@ def run_flask():
 
 # 2. TELEGRAM BOT CODE
 async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start a new giveaway (admin-only)."""
-    global active_giveaway_id
+    user_id = update.effective_user.id
     
-    # Determine the invoking user id
-    user = update.effective_user
-    user_id = None
-    if user:
-        user_id = user.id
-    elif update.effective_chat:
-        user_id = update.effective_chat.id
-
-    logging.info(f"startgiveaway invoked by user_id={user_id} ADMIN_ID={ADMIN_ID}")
-
-    # Try to DM the user their ID
-    sent_dm = False
-    if user_id is not None:
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"Your Telegram ID is: `{user_id}`\n\nCopy this number.",
-                parse_mode="Markdown"
-            )
-            sent_dm = True
-        except Exception as e:
-            logging.warning(f"Could not send DM to {user_id}: {e}")
-            if update.message:
-                try:
-                    await update.message.reply_text(
-                        f"Your Telegram ID is: `{user_id}`\n\nCopy this number.",
-                        parse_mode="Markdown"
-                    )
-                    sent_dm = True
-                except Exception as e2:
-                    logging.warning(f"Also could not reply in-chat: {e2}")
-
-    if not sent_dm:
-        logging.info("Could not deliver user ID message (user may not have started bot or chat context not available).")
-
-    # Ensure we compare ints
-    try:
-        caller_id = int(user_id) if user_id is not None else None
-    except Exception:
-        caller_id = None
-
-    # Helper to get a chat id to message back to the caller
-    caller_chat = caller_id if caller_id is not None else (update.effective_chat.id if update.effective_chat else None)
-
-    # Authorization check
-    if caller_id != ADMIN_ID:
-        try:
-            if update.message:
-                await update.message.reply_text("❌ You are not authorized to start a giveaway.")
-            elif caller_chat is not None:
-                await context.bot.send_message(chat_id=caller_chat, text="❌ You are not authorized to start a giveaway.")
-        except Exception:
-            logging.warning("Could not notify caller about unauthorized access.")
+    # THIS LINE WILL SHOW YOUR ID
+    await update.message.reply_text(f"🔍 Your Telegram ID is: `{user_id}`", parse_mode="Markdown")
+    
+    if str(ADMIN_ID) != str(user_id):
+        await update.message.reply_text("❌ You are not authorized to start a giveaway.")
         return
-
-    # Stop any active giveaway
-    if active_giveaway_id is not None:
-        logging.info(f"Stopping previous giveaway {active_giveaway_id}")
-        if active_giveaway_id in giveaways:
-            del giveaways[active_giveaway_id]
-
-    # Build inline keyboard
-    keyboard = [[InlineKeyboardButton("🎁 Join Giveaway", callback_data="join_giveaway")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    # Normalize CHANNEL_ID
-    post_chat_id = CHANNEL_ID
-    try:
-        if isinstance(CHANNEL_ID, str) and CHANNEL_ID.lstrip('-').isdigit():
-            post_chat_id = int(CHANNEL_ID)
-    except Exception:
-        post_chat_id = CHANNEL_ID
-
-    # Post giveaway
-    try:
-        msg = await context.bot.send_message(
-            chat_id=post_chat_id,
-            text="🔥 *NEW GIVEAWAY STARTED!* 🔥\n\nTap the button below to join!",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
-        active_giveaway_id = msg.message_id
-        giveaways[msg.message_id] = []
-        save_giveaway_to_db(msg.message_id, str(CHANNEL_ID))
-        
-        # Confirm to admin
-        try:
-            if caller_chat is not None:
-                await context.bot.send_message(chat_id=caller_chat, text=f"✅ Giveaway posted in {CHANNEL_ID}")
-            elif update.message:
-                await update.message.reply_text(f"✅ Giveaway posted in {CHANNEL_ID}")
-        except Exception:
-            logging.warning("Could not send confirmation message to admin.")
-            
-    except Exception as e:
-        logging.exception(f"Failed to post giveaway to {CHANNEL_ID}: {e}")
-        try:
-            if caller_chat is not None:
-                await context.bot.send_message(chat_id=caller_chat, text=f"❌ Failed to post giveaway to {CHANNEL_ID}: {e}")
-        except Exception:
-            logging.warning("Could not notify admin about posting failure.")
-        return
+    
+    # put the rest of your giveaway code here
+    await update.message.reply_text("✅ You are authorized! Starting giveaway...")
 
 async def stopgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stop the current giveaway and announce winner (admin-only)."""

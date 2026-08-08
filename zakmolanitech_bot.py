@@ -95,6 +95,24 @@ def add_participant_to_db(msg_id, user_id, username):
         logging.error(f"Failed to add participant to database: {e}")
 
 
+def load_giveaways_from_db():
+    """Load active giveaways from database on startup."""
+    global giveaways, active_giveaway_id
+    try:
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT message_id, channel_id FROM giveaways')
+            rows = cursor.fetchall()
+            for msg_id, channel_id in rows:
+                cursor.execute('SELECT user_id FROM participants WHERE giveaway_id = ?', (msg_id,))
+                participants = [row[0] for row in cursor.fetchall()]
+                giveaways[msg_id] = participants
+                active_giveaway_id = msg_id  # Restore the last giveaway
+            logging.info(f"Loaded {len(giveaways)} giveaways from database")
+    except Exception as e:
+        logging.error(f"Failed to load giveaways from database: {e}")
+
+
 # Helper: normalize chat id (string like -100123... or @channel or int)
 def normalize_chat_id(chat_id):
     if isinstance(chat_id, int):
@@ -452,6 +470,9 @@ async def join_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     # Initialize database
     init_database()
+
+    # Load giveaways from database on startup
+    load_giveaways_from_db()
 
     # Start Flask in a separate thread
     threading.Thread(target=run_flask, daemon=True).start()

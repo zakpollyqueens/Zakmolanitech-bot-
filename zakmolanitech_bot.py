@@ -3,6 +3,7 @@ import asyncio
 import threading
 import logging
 import sqlite3
+import random
 from datetime import datetime
 
 logging.basicConfig(
@@ -24,18 +25,23 @@ for var in required_vars:
 
 TOKEN = os.environ['TOKEN']
 CHANNEL_ID = os.environ['CHANNEL_ID']
-ADMIN_ID = int(os.environ['ADMIN_ID'])
+# Ensure ADMIN_ID is an int when possible
+try:
+    ADMIN_ID = int(os.environ['ADMIN_ID'])
+except Exception:
+    ADMIN_ID = os.environ['ADMIN_ID']
 
 # Store giveaway data in memory (with database backup for persistence)
-giveaways = {}
+giveaways = {}             # mapping message_id -> [user_id, ...]
 active_giveaway_id = None  # Track the current giveaway message ID
 
 # Database setup for persistence
 DB_PATH = 'giveaways.db'
 
+
 def init_database():
     """Initialize SQLite database for giveaway persistence."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS giveaways (
@@ -58,45 +64,58 @@ def init_database():
     conn.commit()
     conn.close()
 
+
 def save_giveaway_to_db(msg_id, channel_id):
     """Save giveaway to database."""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO giveaways (message_id, channel_id, created_at, participants)
-            VALUES (?, ?, ?, ?)
-        ''', (msg_id, channel_id, datetime.now(), ''))
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO giveaways (message_id, channel_id, created_at, participants)
+                VALUES (?, ?, ?, ?)
+            ''', (msg_id, channel_id, datetime.now(), ''))
+            conn.commit()
         logging.info(f"Giveaway {msg_id} saved to database")
     except Exception as e:
         logging.error(f"Failed to save giveaway to database: {e}")
 
+
 def add_participant_to_db(msg_id, user_id, username):
     """Add participant to database."""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO participants (giveaway_id, user_id, username, joined_at)
-            VALUES (?, ?, ?, ?)
-        ''', (msg_id, user_id, username, datetime.now()))
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO participants (giveaway_id, user_id, username, joined_at)
+                VALUES (?, ?, ?, ?)
+            ''', (msg_id, user_id, username, datetime.now()))
+            conn.commit()
         logging.info(f"Participant {user_id} added to giveaway {msg_id}")
     except Exception as e:
         logging.error(f"Failed to add participant to database: {e}")
 
+
+# Helper: normalize chat id (string like -100123... or @channel or int)
+def normalize_chat_id(chat_id):
+    if isinstance(chat_id, int):
+        return chat_id
+    if isinstance(chat_id, str) and chat_id.lstrip('-').isdigit():
+        return int(chat_id)
+    return chat_id
+
+
 # 1. FLASK SERVER TO KEEP RENDER ALIVE
 app_flask = Flask('')
+
 
 @app_flask.route('/')
 def home():
     return "Zakmolanitech Bot is alive!"
 
+
 def run_flask():
     app_flask.run(host='0.0.0.0', port=10000)
+
 
 # 2. TELEGRAM BOT CODE
 async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,8 +180,8 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Helper to get a chat id to message back to the caller
     caller_chat = caller_id if caller_id is not None else (update.effective_chat.id if update.effective_chat else None)
 
-    # Authorization check (use string comparison to avoid type issues)
-    if str(caller_id) != str(ADMIN_ID):
+    # Authorization check
+    if caller_id is None or str(caller_id) != str(ADMIN_ID):
         try:
             if update.message:
                 await update.message.reply_text("❌ You are not authorized to start a giveaway.")
@@ -183,12 +202,7 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     # Normalize CHANNEL_ID
-    post_chat_id = CHANNEL_ID
-    try:
-        if isinstance(CHANNEL_ID, str) and CHANNEL_ID.lstrip('-').isdigit():
-            post_chat_id = int(CHANNEL_ID)
-    except Exception:
-        post_chat_id = CHANNEL_ID
+    post_chat_id = normalize_chat_id(CHANNEL_ID)
 
     # Post giveaway
     try:
@@ -220,15 +234,20 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.warning("Could not notify admin about posting failure.")
         return
 
+
 async def stopgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Stop the current giveaway and announce winner (admin-only)."""
     global active_giveaway_id
-    
+
     user = update.effective_user
     user_id = user.id if user else None
 
     # Authorization check
-    if user_id != ADMIN_ID:
+    try:
+        if int(user_id) != int(ADMIN_ID):
+            await update.message.reply_text("❌ You are not authorized to stop a giveaway.")
+            return
+    except Exception:
         try:
             await update.message.reply_text("❌ You are not authorized to stop a giveaway.")
         except Exception:
@@ -242,8 +261,8 @@ async def stopgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.warning("Could not send no giveaway message.")
         return
 
-    participants = giveaways[active_giveaway_id]
-    
+    participants = giveaways.get(active_giveaway_id, [])
+
     if not participants:
         try:
             await update.message.reply_text("❌ No participants in the giveaway.")
@@ -252,16 +271,18 @@ async def stopgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Select random winner
-    import random
-    winner_id = random.choice(participants)
-    
-    # Normalize CHANNEL_ID
-    post_chat_id = CHANNEL_ID
     try:
-        if isinstance(CHANNEL_ID, str) and CHANNEL_ID.lstrip('-').isdigit():
-            post_chat_id = int(CHANNEL_ID)
-    except Exception:
-        post_chat_id = CHANNEL_ID
+        winner_id = random.choice(participants)
+    except Exception as e:
+        logging.error(f"Failed to pick a winner: {e}")
+        try:
+            await update.message.reply_text("❌ Failed to pick a winner.")
+        except Exception:
+            pass
+        return
+
+    # Normalize CHANNEL_ID
+    post_chat_id = normalize_chat_id(CHANNEL_ID)
 
     # Announce winner
     try:
@@ -274,17 +295,86 @@ async def stopgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Failed to announce winner: {e}")
 
     # Clean up
-    del giveaways[active_giveaway_id]
+    try:
+        del giveaways[active_giveaway_id]
+    except Exception:
+        logging.warning("Could not delete giveaway from memory.")
     active_giveaway_id = None
-    
+
     try:
         await update.message.reply_text(f"✅ Giveaway ended! Winner: {winner_id}")
     except Exception:
         logging.warning("Could not send confirmation message.")
 
+
+async def pickwinner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Pick a winner without stopping the giveaway (admin-only)."""
+    user = update.effective_user
+    user_id = user.id if user else None
+
+    # Authorization check
+    try:
+        if int(user_id) != int(ADMIN_ID):
+            await update.message.reply_text("❌ Not authorized")
+            return
+    except Exception:
+        try:
+            await update.message.reply_text("❌ Not authorized")
+        except Exception:
+            logging.warning("Could not send unauthorized message.")
+        return
+
+    if active_giveaway_id is None or active_giveaway_id not in giveaways:
+        try:
+            await update.message.reply_text("❌ No active giveaway to pick from.")
+        except Exception:
+            logging.warning("Could not send no giveaway message.")
+        return
+
+    participants = giveaways.get(active_giveaway_id, [])
+    if not participants:
+        try:
+            await update.message.reply_text("❌ No participants in the giveaway.")
+        except Exception:
+            logging.warning("Could not send no participants message.")
+        return
+
+    try:
+        winner_id = random.choice(participants)
+    except Exception as e:
+        logging.error(f"Failed to pick a winner: {e}")
+        try:
+            await update.message.reply_text("❌ Failed to pick a winner.")
+        except Exception:
+            pass
+        return
+
+    # Try to fetch winner info for nicer message
+    winner_name = f"User {winner_id}"
+    try:
+        winner_chat = await context.bot.get_chat(winner_id)
+        winner_name = winner_chat.first_name or winner_chat.username or winner_name
+    except Exception:
+        logging.info(f"Could not fetch chat for {winner_id}, announcing by ID.")
+
+    post_chat_id = normalize_chat_id(CHANNEL_ID)
+    try:
+        await context.bot.send_message(
+            chat_id=post_chat_id,
+            text=f"🎉 WINNER: {winner_name}!\n\nCongratulations! DM me to claim your prize!"
+        )
+    except Exception as e:
+        logging.error(f"Failed to announce winner via /pickwinner: {e}")
+
+    try:
+        await update.message.reply_text(f"Winner picked: {winner_name}")
+    except Exception:
+        logging.warning("Could not send confirmation message to admin.")
+
+
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reply with the caller's Telegram ID.
-    
+
     Use this to confirm the numeric ID to put into ADMIN_ID.
     """
     user = update.effective_user
@@ -317,16 +407,24 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.info(f"Could not send DM with ID to {user_id}: {e}")
 
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button clicks for giveaway participation."""
     query = update.callback_query
-    
+
     # Safety check
-    if not query.message or not query.message.message_id:
-        await query.answer("❌ Error: message context missing", show_alert=True)
+    if not query or not query.message or not query.message.message_id:
+        try:
+            await query.answer("❌ Error: message context missing", show_alert=True)
+        except Exception:
+            logging.warning("Callback query missing context and cannot respond.")
         return
 
-    await query.answer()
+    # Acknowledge callback quickly
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     if query.data == "join_giveaway":
         user = query.from_user
@@ -336,16 +434,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user.id not in giveaways[msg_id]:
                 giveaways[msg_id].append(user.id)
                 add_participant_to_db(msg_id, user.id, user.username or "Unknown")
-                await query.answer("✅ You have joined the giveaway!", show_alert=True)
+                try:
+                    await query.answer("✅ You have joined the giveaway!", show_alert=True)
+                except Exception:
+                    pass
             else:
-                await query.answer("⚠️ You already joined!", show_alert=True)
+                try:
+                    await query.answer("⚠️ You already joined!", show_alert=True)
+                except Exception:
+                    pass
         else:
-            await query.answer("❌ Giveaway not found!", show_alert=True)
+            try:
+                await query.answer("❌ Giveaway not found!", show_alert=True)
+            except Exception:
+                pass
+
 
 def main():
     # Initialize database
     init_database()
-    
+
     # Start Flask in a separate thread
     threading.Thread(target=run_flask, daemon=True).start()
 
@@ -353,10 +461,12 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("startgiveaway", startgiveaway))
     app.add_handler(CommandHandler("stopgiveaway", stopgiveaway))
+    app.add_handler(CommandHandler("pickwinner", pickwinner))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CallbackQueryHandler(button_handler))
     print("Bot is running...")
     app.run_polling()
+
 
 if __name__ == '__main__':
     main()

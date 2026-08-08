@@ -408,8 +408,8 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.info(f"Could not send DM with ID to {user_id}: {e}")
 
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button clicks for giveaway participation."""
+async def join_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'Join Giveaway' button clicks."""
     query = update.callback_query
 
     # Safety check
@@ -426,28 +426,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    if query.data == "join_giveaway":
-        user = query.from_user
-        msg_id = query.message.message_id
+    user = query.from_user
+    msg_id = query.message.message_id
 
-        if msg_id in giveaways:
-            if user.id not in giveaways[msg_id]:
-                giveaways[msg_id].append(user.id)
-                add_participant_to_db(msg_id, user.id, user.username or "Unknown")
-                try:
-                    await query.answer("✅ You have joined the giveaway!", show_alert=True)
-                except Exception:
-                    pass
-            else:
-                try:
-                    await query.answer("⚠️ You already joined!", show_alert=True)
-                except Exception:
-                    pass
-        else:
+    if msg_id in giveaways:
+        if user.id not in giveaways[msg_id]:
+            giveaways[msg_id].append(user.id)
+            add_participant_to_db(msg_id, user.id, user.username or "Unknown")
             try:
-                await query.answer("❌ Giveaway not found!", show_alert=True)
+                await query.answer("✅ You have joined the giveaway!", show_alert=True)
             except Exception:
                 pass
+        else:
+            try:
+                await query.answer("⚠️ You already joined!", show_alert=True)
+            except Exception:
+                pass
+    else:
+        try:
+            await query.answer("❌ Giveaway not found!", show_alert=True)
+        except Exception:
+            pass
 
 
 def main():
@@ -463,7 +462,7 @@ def main():
     app.add_handler(CommandHandler("stopgiveaway", stopgiveaway))
     app.add_handler(CommandHandler("pickwinner", pickwinner))
     app.add_handler(CommandHandler("myid", myid))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(join_giveaway, pattern="join_giveaway"))
     print("Bot is running...")
     app.run_polling()
 

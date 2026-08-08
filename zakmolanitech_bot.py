@@ -1,12 +1,8 @@
 import os
-import asyncio
+import json
 import threading
 import logging
-
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+from typing import Dict, List
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -14,12 +10,68 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN = os.environ['TOKEN']
-CHANNEL_ID = os.environ['CHANNEL_ID']  # e.g. @ZakmolanitechSolutions
-ADMIN_ID = int(os.environ['ADMIN_ID']) # e.g. 123456789
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# Store giveaway data in memory
-giveaways = {}
+# Read and validate environment variables
+TOKEN = os.getenv('TOKEN')
+CHANNEL_ID_RAW = os.getenv('CHANNEL_ID')  # e.g. @ZakmolanitechSolutions or -1001234567890
+ADMIN_ID_RAW = os.getenv('ADMIN_ID')      # e.g. 123456789
+
+if not TOKEN:
+    logger.error("Missing TOKEN environment variable.")
+    raise SystemExit("Missing TOKEN environment variable.")
+
+if not CHANNEL_ID_RAW:
+    logger.error("Missing CHANNEL_ID environment variable.")
+    raise SystemExit("Missing CHANNEL_ID environment variable.")
+
+if not ADMIN_ID_RAW:
+    logger.error("Missing ADMIN_ID environment variable.")
+    raise SystemExit("Missing ADMIN_ID environment variable.")
+
+# Convert ADMIN_ID to int safely
+try:
+    ADMIN_ID = int(ADMIN_ID_RAW)
+except ValueError:
+    logger.error("ADMIN_ID must be an integer (user id).")
+    raise SystemExit("ADMIN_ID must be an integer (user id).")
+
+# Normalize CHANNEL_ID: try to convert to int if numeric, otherwise keep string (e.g., @channel)
+try:
+    CHANNEL_ID = int(CHANNEL_ID_RAW)
+except ValueError:
+    CHANNEL_ID = CHANNEL_ID_RAW
+
+# Persistence: save giveaways to a JSON file so entries survive restarts.
+GIVEAWAYS_DB = 'giveaways.json'
+
+def load_giveaways() -> Dict[int, List[int]]:
+    if os.path.exists(GIVEAWAYS_DB):
+        try:
+            with open(GIVEAWAYS_DB, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # keys are stored as strings; convert keys back to int
+                return {int(k): v for k, v in data.items()}
+        except Exception:
+            logger.exception('Failed to load giveaways DB; starting fresh.')
+            return {}
+    return {}
+
+def save_giveaways(giveaways: Dict[int, List[int]]):
+    try:
+        # convert keys to strings for JSON
+        serializable = {str(k): v for k, v in giveaways.items()}
+        with open(GIVEAWAYS_DB, 'w', encoding='utf-8') as f:
+            json.dump(serializable, f, indent=2)
+    except Exception:
+        logger.exception('Failed to save giveaways DB.')
+
+# Store giveaway data in memory (loaded from disk)
+giveaways: Dict[int, List[int]] = load_giveaways()
 
 # 1. FLASK SERVER TO KEEP RENDER ALIVE
 app_flask = Flask('')
@@ -28,59 +80,88 @@ app_flask = Flask('')
 def home():
     return "Zakmolanitech Bot is alive!"
 
+
 def run_flask():
+    # In production, consider using a real WSGI server instead of Flask's dev server.
     app_flask.run(host='0.0.0.0', port=10000)
 
 
 # 2. TELEGRAM BOT CODE
 async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    print(f"DEBUG: User who ran command = {user_id}")  
-    
-    if str(ADMIN_ID) != str(user_id):
-        await update.message.reply_text("❌ You are not authorized to start a giveaway.")
+    user = update.effective_user
+    if user is None:
+        # fallback to message-specific reply
+        if update.message:
+            await update.message.reply_text("❌ Could not determine your user id.")
         return
+
+    user_id = user.id
+    logger.info("User who ran command = %s", user_id)
+
+    # Admin check
+    if ADMIN_ID != user_id:
+        await update.effective_message.reply_text("❌ You are not authorized to start a giveaway.")
+        return
+
     keyboard = [
         [InlineKeyboardButton("🎁 Join Giveaway", callback_data="join_giveaway")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    msg = await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text="🔥 *NEW GIVEAWAY STARTED!* 🔥\n\nTap the button below to join!",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-    
+    text = "🔥 *NEW GIVEAWAY STARTED!* 🔥\n\nTap the button below to join!"
+    try:
+        msg = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    except Exception:
+        logger.exception('Failed to send giveaway post to channel')
+        await update.effective_message.reply_text("❌ Failed to post giveaway to channel. Check bot permissions and CHANNEL_ID.")
+        return
+
     giveaways[msg.message_id] = []
-    await update.message.reply_text(f"✅ Giveaway posted in {CHANNEL_ID}")
+    save_giveaways(giveaways)
+    await update.effective_message.reply_text(f"✅ Giveaway posted in {CHANNEL_ID}")
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-    
+    if query is None:
+        return
+
+    # Only answer with a message when needed. Avoid calling answer() twice.
     if query.data == "join_giveaway":
         user = query.from_user
-        msg_id = query.message.message_id # FIX: use .message.message_id
-        
+        msg = query.message
+        if msg is None:
+            await query.answer("Unable to identify the message for this giveaway.", show_alert=True)
+            return
+
+        msg_id = msg.message_id
+
         if msg_id in giveaways:
             if user.id not in giveaways[msg_id]:
                 giveaways[msg_id].append(user.id)
+                save_giveaways(giveaways)
                 await query.answer("✅ You have joined the giveaway!", show_alert=True)
             else:
                 await query.answer("⚠️ You already joined!", show_alert=True)
+        else:
+            await query.answer("This giveaway is no longer active or the bot was restarted.", show_alert=True)
 
 
 def main():
     # Start Flask in a separate thread
     threading.Thread(target=run_flask, daemon=True).start()
-    
+
     # Start Telegram Bot
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("startgiveaway", startgiveaway))
     app.add_handler(CallbackQueryHandler(button_handler))
-    print("Bot is running...")
+
+    logger.info("Bot is running...")
     app.run_polling()
 
 

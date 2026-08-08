@@ -1,26 +1,66 @@
 import os
 import asyncio
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from dotenv import load_dotenv
 
-# READ SECRETS FROM RENDER
+load_dotenv()
+
 TOKEN = os.environ['TOKEN']
-CHANNEL_ID = os.environ['CHANNEL_ID']
-ADMIN_ID = int(os.environ['ADMIN_ID'])
+CHANNEL_ID = os.environ['CHANNEL_ID']  # e.g. @ZakmolanitechSolutions
+ADMIN_ID = int(os.environ['ADMIN_ID']) # e.g. 123456789
 
-async def start_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+# Store giveaway data in memory
+giveaways = {}
+
+async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ You are not authorized to start a giveaway.")
         return
-    await context.bot.send_message(
+
+    keyboard = [
+        [InlineKeyboardButton("🎁 Join Giveaway", callback_data="join_giveaway")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    msg = await context.bot.send_message(
         chat_id=CHANNEL_ID,
-        text="🎉 GIVEAWAY STARTED! 🎉\n\nReact to join!"
+        text="🔥 *NEW GIVEAWAY STARTED!* 🔥\n\nTap the button below to join!",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
     )
+    
+    giveaways[msg.message_id] = []
+    await update.message.reply_text(f"✅ Giveaway posted in {CHANNEL_ID}")
+
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "join_giveaway":
+        user = query.from_user
+        msg_id = query.message_id
+        
+        if msg_id in giveaways:
+            if user.id not in giveaways[msg_id]:
+                giveaways[msg_id].append(user.id)
+                await query.answer("✅ You have joined the giveaway!", show_alert=True)
+            else:
+                await query.answer("⚠️ You already joined!", show_alert=True)
+
 
 def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("startgiveaway", startgiveaway))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
     print("Bot is running...")
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("startgiveaway", start_giveaway))
     app.run_polling()
+
 
 if __name__ == '__main__':
     main()

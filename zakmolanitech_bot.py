@@ -29,6 +29,13 @@ def run_flask():
 # 2. TELEGRAM BOT CODE
 async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    print(f"DEBUG: User who ran command = {user_id}")  # <
+    
+    if str(ADMIN_ID) != str(user_id):
+        await update.message.reply_text("❌ You are not authorized to start a giveaway.")
+        return
+async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     print(f"Someone tried to run command. Their ID: {user_id}")
     
     if user_id != ADMIN_ID:

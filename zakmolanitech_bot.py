@@ -28,6 +28,7 @@ app_flask = Flask('')
 def home():
     return "Zakmolanitech Bot is alive!"
 
+
 def run_flask():
     app_flask.run(host='0.0.0.0', port=10000)
 
@@ -35,25 +36,15 @@ def run_flask():
 # 2. TELEGRAM BOT CODE
 async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    print(f"DEBUG: User who ran command = {user_id}")  
+    
+    # This will send YOU the ID in telegram
+    await update.message.reply_text(f"Your Telegram ID is: `{user_id}`\n\nCopy this number.", parse_mode="Markdown")
     
     if str(ADMIN_ID) != str(user_id):
         await update.message.reply_text("❌ You are not authorized to start a giveaway.")
         return
-    keyboard = [
-        [InlineKeyboardButton("🎁 Join Giveaway", callback_data="join_giveaway")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    msg = await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text="🔥 *NEW GIVEAWAY STARTED!* 🔥\n\nTap the button below to join!",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
     
-    giveaways[msg.message_id] = []
-    await update.message.reply_text(f"✅ Giveaway posted in {CHANNEL_ID}")
+    # rest of your giveaway code...
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

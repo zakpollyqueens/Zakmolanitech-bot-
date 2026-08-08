@@ -2,6 +2,8 @@ import os
 import asyncio
 import threading
 import logging
+import logging
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -40,14 +42,6 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(ADMIN_ID) != str(user_id):
         await update.message.reply_text("❌ You are not authorized to start a giveaway.")
         return
-async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    print(f"Someone tried to run command. Their ID: {user_id}")
-    
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not authorized to start a giveaway.")
-        return
-
     keyboard = [
         [InlineKeyboardButton("🎁 Join Giveaway", callback_data="join_giveaway")]
     ]

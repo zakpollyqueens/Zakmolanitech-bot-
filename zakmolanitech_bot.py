@@ -134,6 +134,40 @@ async def startgiveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.warning("Could not send confirmation message to admin.")
 
 
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply with the caller's Telegram ID and attempt a DM as well.
+
+    Use this to confirm the numeric ID to put into ADMIN_ID.
+    """
+    user = update.effective_user
+    user_id = None
+    if user:
+        user_id = user.id
+    elif update.effective_chat:
+        user_id = update.effective_chat.id
+
+    if user_id is None:
+        # Nothing we can do
+        if update.message:
+            await update.message.reply_text("Could not determine your Telegram ID.")
+        return
+
+    text = f"Your Telegram ID is: `{user_id}`\n\nCopy this number and set it as ADMIN_ID in your environment." 
+
+    # First try to reply in the same chat
+    try:
+        if update.message:
+            await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        logging.warning(f"Could not reply in-chat with ID: {e}")
+
+    # Also try sending as a DM (works only if user started the bot)
+    try:
+        await context.bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+    except Exception as e:
+        logging.info(f"Could not send DM with ID to {user_id}: {e}")
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -157,6 +191,7 @@ def main():
     # Start Telegram Bot
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("startgiveaway", startgiveaway))
+    app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CallbackQueryHandler(button_handler))
     print("Bot is running...")
     app.run_polling()
